@@ -53,6 +53,17 @@ Future<Directory> _getMangaDir() async {
   return result;
 }
 
+Iterable _getSortedDirElms(list) {
+  return list
+      .map((v) => {
+            'dir': v,
+            'alias': v.path.split("/").last,
+            'n': int.parse((v.path.split("/").last))
+          })
+      .toList()
+    ..sort((a, b) => a['n'].compareTo(b['n']));
+}
+
 Future<bool> _downloadHtml(String url, String filePath) async {
   File file = File(filePath);
 
@@ -68,6 +79,25 @@ Future<void> _syncHtmlTemplate() async {
 
   final filePath = await _getHtmlPath();
   await _downloadHtml(homeUrl, filePath);
+}
+
+Iterable _getDirSortedItems(dirItems) {
+  Iterable result = dirItems.map((v) {
+    String alias = v.path.split("/").last;
+
+    RegExp exp = RegExp(r'(^\d+)');
+    RegExpMatch? match = exp.firstMatch(alias);
+
+    var n = int.parse(match![0]!);
+
+    return {
+      'dir': v,
+      'alias': alias,
+      'n': n,
+    };
+  });
+
+  return result.toList()..sort((a, b) => a['n'].compareTo(b['n']));
 }
 
 class MyApp extends StatelessWidget {
@@ -224,13 +254,7 @@ class _MyWebViewState extends State<ChildWidget> {
         debugPrint("Selected manga: $name");
 
         Iterable chapters =
-            selMangaDir.listSync().whereType<Directory>().map((v) => {
-                  'dir': v,
-                  'alias': v.path.split("/").last,
-                  'n': int.parse((v.path.split("/").last))
-                });
-
-        chapters = chapters.toList()..sort((a, b) => a['n'].compareTo(b['n']));
+            _getDirSortedItems(selMangaDir.listSync().whereType<Directory>());
 
         for (var i = 0; i < chapters.length; i++) {
           var chapter = chapters.elementAt(i);
@@ -258,15 +282,13 @@ class _MyWebViewState extends State<ChildWidget> {
         Directory mangaDir = await _getMangaDir();
         Directory chapterDir = Directory("${mangaDir.path}/$name/$chapter");
 
-        var items = chapterDir.listSync().toList();
-        items.sort((a, b) => a.path.compareTo(b.path));
+        Iterable items = _getDirSortedItems(chapterDir
+            .listSync()
+            .where((element) => element.path.split('/').last != 'done'));
 
         for (var i = 0; i < items.length; i++) {
-          var image = items[i];
-          String itemName = image.path.split("/").last;
-          if (itemName == 'done') {
-            continue;
-          }
+          var item = items.elementAt(i);
+          var image = item['dir'];
 
           String imageBase64 = await _getImageBase64(image.path);
 
