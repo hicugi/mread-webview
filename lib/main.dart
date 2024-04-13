@@ -175,7 +175,7 @@ class _MyWebViewState extends State<ChildWidget> {
         },
       )
 
-      // sync manga list
+      // sync manga
       ..addJavaScriptChannel('flSyncManga',
           onMessageReceived: (JavaScriptMessage data) async {
         var [name, image] = data.message.split("|");
@@ -188,8 +188,6 @@ class _MyWebViewState extends State<ChildWidget> {
 
         String imageUrl = "$host/$image";
         await _downloadImage(imageUrl, "${manga.path}/cover.jpg");
-
-        _insertMangaList();
       })
 
       // select manga
@@ -218,7 +216,6 @@ class _MyWebViewState extends State<ChildWidget> {
 
           String script =
               "syncChapter('$name', { name: '$chapterName', itemsCount: ${chapterInfo['count']}, size: '${chapterInfo['size']}MB', isDownloaded: $dodwnloaded });";
-          debugPrint("- sending chapter: $script");
           _controller.runJavaScript(script);
         }
       })
@@ -283,22 +280,23 @@ class _MyWebViewState extends State<ChildWidget> {
           await _syncHtmlTemplate();
           _controller.reload();
         },
-      );
+      )
+      ..setNavigationDelegate(NavigationDelegate(onPageFinished: (String url) {
+        _controller.runJavaScript("window.hostUrl = '$host';");
+        _insertMangaList();
+
+        controller.runJavaScript(
+          "window.hostUrl = '$host';",
+        );
+      }));
+    ;
     // #enddocregion platform_features
 
     final String htmlBase64 = base64Encode(
       const Utf8Encoder().convert(widget.htmlContent),
     );
     controller.loadRequest(Uri.parse("data:text/html;base64,$htmlBase64"));
-
-    const Duration delay = Duration(seconds: 1);
-    Future.delayed(delay, () {
-      _insertMangaList();
-
-      controller.runJavaScript(
-        "window.hostUrl = '$host';",
-      );
-    });
+    ;
 
     _controller = controller;
   }
@@ -335,13 +333,13 @@ class _MyWebViewState extends State<ChildWidget> {
   }
 
   Future<void> _insertMangaList() async {
-    _controller.runJavaScript("clearMangaList();");
-
     Directory mangaDir = await _getMangaDir();
 
     mangaDir.listSync().forEach((manga) async {
       String name = manga.path.split("/").last;
       String image = await _getImageBase64("${manga.path}/cover.jpg");
+
+      debugPrint("Inserting manga: $name");
 
       _controller.runJavaScript(
         "insertManga({ name: '$name', image: '$image' });",
