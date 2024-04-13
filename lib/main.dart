@@ -1,15 +1,5 @@
-import 'dart:ffi';
-
 import 'package:flutter/material.dart';
-import 'package:flutter/widgets.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-
-// #docregion platform_imports
-// Import for Android features.
-import 'package:webview_flutter_android/webview_flutter_android.dart';
-// Import for iOS features.
-import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
-// #enddocregion platform_imports
 
 // For downloading files
 import 'package:path_provider/path_provider.dart';
@@ -53,17 +43,6 @@ Future<Directory> _getMangaDir() async {
   return result;
 }
 
-Iterable _getSortedDirElms(list) {
-  return list
-      .map((v) => {
-            'dir': v,
-            'alias': v.path.split("/").last,
-            'n': int.parse((v.path.split("/").last))
-          })
-      .toList()
-    ..sort((a, b) => a['n'].compareTo(b['n']));
-}
-
 Future<bool> _downloadHtml(String url, String filePath) async {
   File file = File(filePath);
 
@@ -103,8 +82,6 @@ Iterable _getDirSortedItems(dirItems) {
 class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    _checkFiles();
-
     return MaterialApp(
       title: 'MRead',
       theme: ThemeData(
@@ -112,31 +89,6 @@ class MyApp extends StatelessWidget {
       ),
       home: MyWebView(),
     );
-  }
-
-  void _checkFiles() async {
-    Directory mangaDir = await _getMangaDir();
-
-    mangaDir.listSync().forEach((manga) {
-      String name = manga.path.split("/").last;
-      debugPrint(name);
-
-      Directory(manga.path).listSync().forEach((chapter) {
-        if (chapter is! Directory) {
-          return;
-        }
-
-        String chapterName = chapter.path.split("/").last;
-
-        var imageCount = 0;
-
-        Directory(chapter.path).listSync().forEach((_) {
-          imageCount++;
-        });
-
-        debugPrint("- $chapterName : $imageCount");
-      });
-    });
   }
 }
 
@@ -207,10 +159,6 @@ class _MyWebViewState extends State<ChildWidget> {
     final WebViewController controller =
         WebViewController.fromPlatformCreationParams(params);
     // #enddocregion platform_features
-
-    // Get html content from cache
-    // var htmlFile = DefaultCacheManager().getSingleFile(homeUrl);
-    // String htmlContent = await htmlFile.readAsString();
 
     controller
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
@@ -340,14 +288,6 @@ class _MyWebViewState extends State<ChildWidget> {
       const Utf8Encoder().convert(widget.htmlContent),
     );
     controller.loadRequest(Uri.parse("data:text/html;base64,$htmlBase64"));
-
-    // #docregion platform_features
-    // if (controller.platform is AndroidWebViewController) {
-    //   AndroidWebViewController.enableDebugging(true);
-    //   (controller.platform as AndroidWebViewController)
-    //       .setMediaPlaybackRequiresUserGesture(false);
-    // }
-    // #enddocregion platform_features
 
     const Duration delay = Duration(seconds: 1);
     Future.delayed(delay, () {
