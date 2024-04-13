@@ -1,4 +1,6 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 // For downloading files
@@ -8,7 +10,6 @@ import 'package:http/http.dart' as http;
 // For the File type
 import 'dart:io';
 import 'dart:convert';
-import 'dart:typed_data';
 import 'dart:async';
 
 // 10.0.2.2 bind with localhost
@@ -103,7 +104,7 @@ class _ParentWidgetState extends State<MyWebView> {
   Future<String> _getHtml() async {
     final filePath = await _getHtmlPath();
 
-    if (File(filePath).existsSync()) {
+    if (!kDebugMode && File(filePath).existsSync()) {
       debugPrint("============= HTML template: Reading from cache");
       return File(filePath).readAsStringSync();
     }
@@ -280,6 +281,7 @@ class _MyWebViewState extends State<ChildWidget> {
         'flClearCache',
         onMessageReceived: (JavaScriptMessage data) async {
           await _syncHtmlTemplate();
+          _controller.reload();
         },
       );
     // #enddocregion platform_features
