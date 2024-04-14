@@ -149,6 +149,8 @@ class _MyWebViewState extends State<ChildWidget> {
   String htmlContent = "";
   bool isHtmlLoaded = false;
 
+  String lastManga = "";
+
   @override
   void initState() {
     super.initState();
@@ -195,6 +197,8 @@ class _MyWebViewState extends State<ChildWidget> {
           onMessageReceived: (JavaScriptMessage data) async {
         var name = data.message;
 
+        lastManga = name;
+
         Directory mangaDir = await _getMangaDir();
         Directory selMangaDir = Directory("${mangaDir.path}/$name");
 
@@ -228,6 +232,16 @@ class _MyWebViewState extends State<ChildWidget> {
         Directory mangaDir = await _getMangaDir();
         Directory chapterDir = Directory("${mangaDir.path}/$name/$chapter");
 
+        // create file
+        Directory localDir = await _getLocaleDir();
+        File saveFile = File("${localDir.path}/save");
+
+        if (!saveFile.existsSync()) {
+          saveFile.create();
+        }
+
+        saveFile.writeAsStringSync("$name|$chapter");
+
         Iterable items = _getDirSortedItems(chapterDir
             .listSync()
             .where((element) => element.path.split('/').last != 'done'));
@@ -237,8 +251,6 @@ class _MyWebViewState extends State<ChildWidget> {
           var image = item['dir'];
 
           String imageBase64 = await _getImageBase64(image.path);
-
-          debugPrint("Inserting image: ${image.path}");
 
           _controller.runJavaScript(
             "insertImage('$imageBase64');",
@@ -281,13 +293,24 @@ class _MyWebViewState extends State<ChildWidget> {
           _controller.reload();
         },
       )
-      ..setNavigationDelegate(NavigationDelegate(onPageFinished: (String url) {
+      ..setNavigationDelegate(
+          NavigationDelegate(onPageFinished: (String url) async {
         _controller.runJavaScript("window.hostUrl = '$host';");
-        _insertMangaList();
+        await _insertMangaList();
 
-        controller.runJavaScript(
-          "window.hostUrl = '$host';",
-        );
+        Directory localDir = await _getLocaleDir();
+        File saveFile = File("${localDir.path}/save");
+
+        if (saveFile.existsSync()) {
+          var [name, chapter] = saveFile.readAsStringSync().split("|");
+
+          _controller.runJavaScript(
+            "currentManga.select('$name');",
+          );
+          _controller.runJavaScript(
+            "setTimeout(() => { chaptersSelElm.value = '$chapter'; currentManga.selectChapter('$chapter'); }, 500);",
+          );
+        }
       }));
     ;
     // #enddocregion platform_features
