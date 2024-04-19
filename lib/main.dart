@@ -68,7 +68,12 @@ Iterable _getDirSortedItems(dirItems) {
     RegExp exp = RegExp(r'(^\d+)');
     RegExpMatch? match = exp.firstMatch(alias);
 
-    var n = int.parse(match![0]!);
+    var n = double.parse(match![0]!);
+    var n2 = alias.split('-');
+
+    if (n2.length > 1) {
+      n += double.parse(n2[1]) / 100000;
+    }
 
     return {
       'dir': v,
