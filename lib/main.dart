@@ -17,9 +17,15 @@ import 'dart:async';
 const host = 'http://10.20.40.53:8000';
 const homeUrl = '$host/template.html';
 
+const chaptersSyncTimeout = Duration(milliseconds: 300);
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(MyApp());
+}
+
+void innerDebug(String value) {
+  debugPrint("===================== $value");
 }
 
 Future<Directory> _getLocaleDir() async {
@@ -44,10 +50,23 @@ Future<Directory> _getMangaDir() async {
   return result;
 }
 
+String _getImageBase64(String path) {
+  File imageFile = File(path);
+
+  Uint8List imageBytes = imageFile.readAsBytesSync();
+  String imageBase64 = base64Encode(imageBytes);
+
+  var stat = imageFile.statSync();
+  return "data:${stat.type};base64, $imageBase64";
+}
+
 Future<bool> _downloadHtml(String url, String filePath) async {
   File file = File(filePath);
 
+  innerDebug("Downloading html $filePath from $url");
+
   await http.get(Uri.parse(url)).then((response) {
+    innerDebug("Downloaded");
     return file.writeAsString(response.body);
   });
 
@@ -55,7 +74,7 @@ Future<bool> _downloadHtml(String url, String filePath) async {
 }
 
 Future<void> _syncHtmlTemplate() async {
-  debugPrint("============= HTML template: Downloading from server");
+  innerDebug("HTML template: Downloading from server $host");
 
   final filePath = await _getHtmlPath();
   await _downloadHtml(homeUrl, filePath);
@@ -85,6 +104,27 @@ Iterable _getDirSortedItems(dirItems) {
   return result.toList()..sort((a, b) => a['n'].compareTo(b['n']));
 }
 
+Future<Map<String, dynamic>> _getChapterDetails(
+    String name, String chapter) async {
+  Directory mangaDir = await _getMangaDir();
+
+  var path = "${mangaDir.path}/$name/$chapter";
+  Directory chapterDir = Directory(path);
+
+  var count = chapterDir.listSync().length;
+  double size = 0;
+
+  chapterDir.listSync().forEach((image) {
+    size += image.statSync().size;
+  });
+
+  return {
+    'path': path,
+    'size': (size / 1024 / 1024).toStringAsFixed(2),
+    'count': count,
+  };
+}
+
 class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -110,7 +150,8 @@ class _ParentWidgetState extends State<MyWebView> {
     final filePath = await _getHtmlPath();
 
     if (!kDebugMode && File(filePath).existsSync()) {
-      debugPrint("============= HTML template: Reading from cache");
+      // if (File(filePath).existsSync()) {
+      innerDebug("HTML template: Reading from cache");
       return File(filePath).readAsStringSync();
     }
 
@@ -153,8 +194,7 @@ class _MyWebViewState extends State<ChildWidget> {
   late final WebViewController _controller;
   String htmlContent = "";
   bool isHtmlLoaded = false;
-
-  String lastManga = "";
+  num flSelectMangaLastId = 0;
 
   @override
   void initState() {
@@ -185,67 +225,43 @@ class _MyWebViewState extends State<ChildWidget> {
       // sync manga
       ..addJavaScriptChannel('flSyncManga',
           onMessageReceived: (JavaScriptMessage data) async {
-        var [name, image] = data.message.split("|");
+        var [name, url] = data.message.split("|");
         Directory mangaDir = await _getMangaDir();
+
+        innerDebug("$name $url ${mangaDir.path}");
 
         Directory manga = Directory("${mangaDir.path}/$name");
         if (!manga.existsSync()) {
           manga.createSync(recursive: true);
         }
 
-        String imageUrl = "$host/$image";
-        await _downloadImage(imageUrl, "${manga.path}/cover.jpg");
+        await _downloadImage(url, "${manga.path}/cover.jpg");
+        await _insertMangaList();
       })
 
       // select manga
       ..addJavaScriptChannel('flSelectManga',
-          onMessageReceived: (JavaScriptMessage data) async {
-        var name = data.message;
-
-        lastManga = name;
-
-        Directory mangaDir = await _getMangaDir();
-        Directory selMangaDir = Directory("${mangaDir.path}/$name");
-
-        debugPrint("Selected manga: $name");
-
-        Iterable chapters =
-            _getDirSortedItems(selMangaDir.listSync().whereType<Directory>());
-
-        for (var i = 0; i < chapters.length; i++) {
-          var chapter = chapters.elementAt(i);
-
-          String chapterName = chapter['alias'];
-          var chapterInfo = await _getChapterDetails(name, chapterName);
-
-          String dodwnloaded =
-              File("${selMangaDir.path}/$chapterName/done").existsSync()
-                  ? 'true'
-                  : 'false';
-
-          String script =
-              "syncChapter('$name', { name: '$chapterName', itemsCount: ${chapterInfo['count']}, size: '${chapterInfo['size']}MB', isDownloaded: $dodwnloaded });";
-          _controller.runJavaScript(script);
-        }
+          onMessageReceived: (JavaScriptMessage data) {
+        _syncChapters(data.message);
       })
 
       // read chapter
-      ..addJavaScriptChannel('flSelectChapter',
+      ..addJavaScriptChannel('flInsertImgsFromChapter',
           onMessageReceived: (JavaScriptMessage data) async {
         var [name, chapter] = data.message.split("|");
 
         Directory mangaDir = await _getMangaDir();
         Directory chapterDir = Directory("${mangaDir.path}/$name/$chapter");
 
-        // create file
-        Directory localDir = await _getLocaleDir();
-        File saveFile = File("${localDir.path}/save");
+        // create save file
+        File saveFile = File("${mangaDir.path}/save");
 
         if (!saveFile.existsSync()) {
           saveFile.create();
         }
 
-        saveFile.writeAsStringSync("$name|$chapter");
+        saveFile.writeAsStringSync(chapter);
+        innerDebug("Last readed chapter $chapter");
 
         Iterable items = _getDirSortedItems(chapterDir
             .listSync()
@@ -255,10 +271,10 @@ class _MyWebViewState extends State<ChildWidget> {
           var item = items.elementAt(i);
           var image = item['dir'];
 
-          String imageBase64 = await _getImageBase64(image.path);
+          String imageBase64 = _getImageBase64(image.path);
 
           _controller.runJavaScript(
-            "insertImage('$imageBase64');",
+            "flInsertImage('$imageBase64');",
           );
         }
       })
@@ -267,30 +283,42 @@ class _MyWebViewState extends State<ChildWidget> {
       ..addJavaScriptChannel(
         'flDownloadImage',
         onMessageReceived: (JavaScriptMessage data) async {
-          var [path, name, chapter, fileName, imagesCount] =
+          var [url, name, chapter, fileName, imagesCount] =
               data.message.split("|");
 
           Directory mangaDir = await _getMangaDir();
 
-          var url = "$host/$path";
-
           String savedDir = "${mangaDir.path}/$name/$chapter";
           Directory(savedDir).createSync(recursive: true);
 
-          debugPrint("Downloading image: $url to $savedDir/$fileName");
+          // check if image is exist
+          // if (!File("$savedDir/$fileName").existsSync()) {}
           await _downloadImage(url, "$savedDir/$fileName");
+
+          _controller.runJavaScript("flImageDownloaded();");
 
           var chapterInfo = await _getChapterDetails(name, chapter);
 
+          innerDebug(
+              "Downloading image (${chapterInfo['count']}/$imagesCount): $url to $savedDir/$fileName");
+
           if (chapterInfo['count'] == int.parse(imagesCount)) {
-            File("$savedDir/done").createSync();
-            _controller.runJavaScript(
-                "syncChapter('$name', { name: '$chapter', itemsCount: $imagesCount, size: '${chapterInfo['size']}MB', isDownloaded: true });");
+            _syncChapters(name);
           }
         },
       )
 
       // clear cache
+      ..addJavaScriptChannel(
+        'flRemoveAll',
+        onMessageReceived: (JavaScriptMessage data) async {
+          Directory parent = await _getMangaDir();
+          await parent.delete(recursive: true);
+
+          await _syncHtmlTemplate();
+          _controller.reload();
+        },
+      )
       ..addJavaScriptChannel(
         'flClearCache',
         onMessageReceived: (JavaScriptMessage data) async {
@@ -298,24 +326,21 @@ class _MyWebViewState extends State<ChildWidget> {
           _controller.reload();
         },
       )
+      ..addJavaScriptChannel(
+        'flRemoveManga',
+        onMessageReceived: (JavaScriptMessage data) async {
+          Directory parent = await _getMangaDir();
+          Directory mangaDir = Directory("${parent.path}/${data.message}");
+          await mangaDir.delete(recursive: true);
+
+          await _controller.reload();
+          await _insertMangaList();
+        },
+      )
       ..setNavigationDelegate(
           NavigationDelegate(onPageFinished: (String url) async {
         _controller.runJavaScript("window.hostUrl = '$host';");
         await _insertMangaList();
-
-        Directory localDir = await _getLocaleDir();
-        File saveFile = File("${localDir.path}/save");
-
-        if (saveFile.existsSync()) {
-          var [name, chapter] = saveFile.readAsStringSync().split("|");
-
-          _controller.runJavaScript(
-            "currentManga.select('$name');",
-          );
-          _controller.runJavaScript(
-            "setTimeout(() => { chaptersSelElm.value = '$chapter'; currentManga.selectChapter('$chapter'); }, 500);",
-          );
-        }
       }));
     ;
     // #enddocregion platform_features
@@ -324,55 +349,78 @@ class _MyWebViewState extends State<ChildWidget> {
       const Utf8Encoder().convert(widget.htmlContent),
     );
     controller.loadRequest(Uri.parse("data:text/html;base64,$htmlBase64"));
-    ;
 
     _controller = controller;
-  }
-
-  Future<String> _getImageBase64(String path) async {
-    File imageFile = File(path);
-
-    Uint8List imageBytes = await imageFile.readAsBytes();
-    String imageBase64 = base64Encode(imageBytes);
-
-    var stat = imageFile.statSync();
-    return "data:${stat.type};base64, $imageBase64";
-  }
-
-  Future<Map<String, dynamic>> _getChapterDetails(
-      String name, String chapter) async {
-    Directory mangaDir = await _getMangaDir();
-
-    var path = "${mangaDir.path}/$name/$chapter";
-    Directory chapterDir = Directory(path);
-
-    var count = chapterDir.listSync().length;
-    double size = 0;
-
-    chapterDir.listSync().forEach((image) {
-      size += image.statSync().size;
-    });
-
-    return {
-      'path': path,
-      'size': (size / 1024 / 1024).toStringAsFixed(2),
-      'count': count,
-    };
   }
 
   Future<void> _insertMangaList() async {
     Directory mangaDir = await _getMangaDir();
 
-    mangaDir.listSync().forEach((manga) async {
+    List<String> items = [];
+
+    mangaDir.listSync().forEach((manga) {
       String name = manga.path.split("/").last;
-      String image = await _getImageBase64("${manga.path}/cover.jpg");
+      String image = _getImageBase64("${manga.path}/cover.jpg");
 
-      debugPrint("Inserting manga: $name");
+      innerDebug("Inserting locale manga: $name");
 
-      _controller.runJavaScript(
-        "insertManga({ name: '$name', image: '$image' });",
-      );
+      String savedChapter = '';
+      File saveFile = File("${manga.path}/save");
+
+      if (saveFile.existsSync()) {
+        String chapter = saveFile.readAsStringSync();
+        savedChapter = ", currentChapter: '$chapter'";
+      }
+
+      items.add("{ name: '$name', image: '$image'$savedChapter }");
     });
+
+    _controller.runJavaScript("flSyncMangaList([${items.join(',')}]);");
+  }
+
+  Future<void> _syncChapters(String name) async {
+    flSelectMangaLastId = (flSelectMangaLastId + 1) % 255;
+    num currentId = flSelectMangaLastId;
+
+    await Future.delayed(chaptersSyncTimeout);
+
+    if (currentId != flSelectMangaLastId) return;
+
+    Directory mangaDir = await _getMangaDir();
+    Directory selMangaDir = Directory("${mangaDir.path}/$name");
+
+    if (!selMangaDir.existsSync()) {
+      return;
+    }
+
+    File saveFile = File("${mangaDir.path}/save");
+    String lastReadedChapter = "";
+
+    if (saveFile.existsSync()) {
+      lastReadedChapter = saveFile.readAsStringSync();
+    }
+
+    innerDebug("Selected manga: $name");
+
+    Iterable chapters =
+        _getDirSortedItems(selMangaDir.listSync().whereType<Directory>());
+
+    List<String> jsData = [];
+
+    for (var i = 0; i < chapters.length; i++) {
+      var chapter = chapters.elementAt(i);
+
+      String chapterName = chapter['alias'];
+      var chapterInfo = await _getChapterDetails(name, chapterName);
+
+      String continueValue =
+          lastReadedChapter == chapterName ? 'true' : 'false';
+
+      jsData.add(
+          "{ name: '$chapterName', itemsCount: ${chapterInfo['count']}, size: '${chapterInfo['size']}MB', isDownloaded: true, isContinue: $continueValue }");
+    }
+
+    _controller.runJavaScript("flSyncChapters([${jsData.join(',')}]);");
   }
 
   Future<bool> _downloadImage(String url, String filePath) async {
@@ -381,14 +429,14 @@ class _MyWebViewState extends State<ChildWidget> {
     await http.get(Uri.parse(url)).then((response) {
       if (file.existsSync()) {
         if (file.lengthSync() == response.bodyBytes.length) {
-          debugPrint(
+          innerDebug(
               "File already exists: $filePath ${response.bodyBytes.length}");
           return;
         }
       }
 
       file.writeAsBytes(response.bodyBytes);
-      debugPrint("Downloaded image: $filePath ${response.bodyBytes.length}");
+      innerDebug("Downloaded image: $filePath ${response.bodyBytes.length}");
     });
 
     return true;
