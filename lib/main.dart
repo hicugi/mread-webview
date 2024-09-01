@@ -50,10 +50,10 @@ Future<Directory> _getMangaDir() async {
   return result;
 }
 
-String _getImageBase64(String path) {
+Future<String> _getImageBase64(String path) async {
   File imageFile = File(path);
 
-  Uint8List imageBytes = imageFile.readAsBytesSync();
+  Uint8List imageBytes = await imageFile.readAsBytes();
   String imageBase64 = base64Encode(imageBytes);
 
   var stat = imageFile.statSync();
@@ -150,7 +150,6 @@ class _ParentWidgetState extends State<MyWebView> {
     final filePath = await _getHtmlPath();
 
     if (!kDebugMode && File(filePath).existsSync()) {
-      // if (File(filePath).existsSync()) {
       innerDebug("HTML template: Reading from cache");
       return File(filePath).readAsStringSync();
     }
@@ -223,6 +222,12 @@ class _MyWebViewState extends State<ChildWidget> {
       )
 
       // sync manga
+      ..addJavaScriptChannel(
+        'flFetchMangaList',
+        onMessageReceived: (JavaScriptMessage data) async {
+          await _insertMangaList();
+        },
+      )
       ..addJavaScriptChannel('flSyncManga',
           onMessageReceived: (JavaScriptMessage data) async {
         var [name, url] = data.message.split("|");
@@ -271,7 +276,7 @@ class _MyWebViewState extends State<ChildWidget> {
           var item = items.elementAt(i);
           var image = item['dir'];
 
-          String imageBase64 = _getImageBase64(image.path);
+          String imageBase64 = await _getImageBase64(image.path);
 
           _controller.runJavaScript(
             "flInsertImage('$imageBase64');",
@@ -300,11 +305,7 @@ class _MyWebViewState extends State<ChildWidget> {
           var chapterInfo = await _getChapterDetails(name, chapter);
 
           innerDebug(
-              "Downloading image (${chapterInfo['count']}/$imagesCount): $url to $savedDir/$fileName");
-
-          if (chapterInfo['count'] == int.parse(imagesCount)) {
-            _syncChapters(name);
-          }
+              "Downloading image (${chapterInfo['count']}/$imagesCount) from $url");
         },
       )
 
@@ -340,7 +341,6 @@ class _MyWebViewState extends State<ChildWidget> {
       ..setNavigationDelegate(
           NavigationDelegate(onPageFinished: (String url) async {
         _controller.runJavaScript("window.hostUrl = '$host';");
-        await _insertMangaList();
       }));
     ;
     // #enddocregion platform_features
@@ -356,11 +356,11 @@ class _MyWebViewState extends State<ChildWidget> {
   Future<void> _insertMangaList() async {
     Directory mangaDir = await _getMangaDir();
 
-    List<String> items = [];
+    _controller.runJavaScript("flSyncMangaList([]);");
 
-    mangaDir.listSync().forEach((manga) {
+    mangaDir.listSync().forEach((manga) async {
       String name = manga.path.split("/").last;
-      String image = _getImageBase64("${manga.path}/cover.jpg");
+      String image = await _getImageBase64("${manga.path}/cover.jpg");
 
       innerDebug("Inserting locale manga: $name");
 
@@ -372,10 +372,9 @@ class _MyWebViewState extends State<ChildWidget> {
         savedChapter = ", currentChapter: '$chapter'";
       }
 
-      items.add("{ name: '$name', image: '$image'$savedChapter }");
+      String insertData = "{ name: '$name', image: '$image'$savedChapter }";
+      _controller.runJavaScript("flInsertManga($insertData);");
     });
-
-    _controller.runJavaScript("flSyncMangaList([${items.join(',')}]);");
   }
 
   Future<void> _syncChapters(String name) async {
