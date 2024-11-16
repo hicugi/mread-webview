@@ -14,8 +14,8 @@ import 'dart:async';
 
 // 10.0.2.2 bind with localhost
 // const bool _isDebug = bool.fromEnvironment('dart.vm.product') == false;
-const host = 'http://10.20.40.53:8000';
-const homeUrl = '$host/template.html';
+String host = '';
+String ADDR_URL = 'http://mread.webmaho.com/appHost.php';
 
 const chaptersSyncTimeout = Duration(milliseconds: 300);
 
@@ -33,9 +33,13 @@ Future<Directory> _getLocaleDir() async {
   return main;
 }
 
-Future<String> _getHtmlPath() async {
+Future<File> _getHtmlFile() async {
   Directory main = await _getLocaleDir();
-  return "${main.path}/index.html";
+  return File("${main.path}/index.html");
+}
+Future<File> _getAddrFile() async {
+  Directory main = await _getLocaleDir();
+  return File("${main.path}/addr");
 }
 
 Future<Directory> _getMangaDir() async {
@@ -66,7 +70,6 @@ Future<bool> _downloadHtml(String url, String filePath) async {
   innerDebug("Downloading html $filePath from $url");
 
   await http.get(Uri.parse(url)).then((response) {
-    innerDebug("Downloaded");
     return file.writeAsString(response.body);
   });
 
@@ -74,10 +77,19 @@ Future<bool> _downloadHtml(String url, String filePath) async {
 }
 
 Future<void> _syncHtmlTemplate() async {
-  innerDebug("HTML template: Downloading from server $host");
+  File hostFile = await _getAddrFile();
+  File htmlFile = await _getHtmlFile();
 
-  final filePath = await _getHtmlPath();
-  await _downloadHtml(homeUrl, filePath);
+  innerDebug("Syncing html template");
+
+  await http.get(Uri.parse(ADDR_URL)).then((response) async {
+    host = response.body;
+    hostFile.writeAsString(host);
+
+    innerDebug("Updating cache for HTML ${host}");
+
+    await _downloadHtml("${host}/template.html", htmlFile.path);
+  });
 }
 
 Iterable _getDirSortedItems(dirItems) {
@@ -112,15 +124,9 @@ Future<Map<String, dynamic>> _getChapterDetails(
   Directory chapterDir = Directory(path);
 
   var count = chapterDir.listSync().length;
-  double size = 0;
-
-  chapterDir.listSync().forEach((image) {
-    size += image.statSync().size;
-  });
 
   return {
     'path': path,
-    'size': (size / 1024 / 1024).toStringAsFixed(2),
     'count': count,
   };
 }
@@ -147,15 +153,20 @@ class _ParentWidgetState extends State<MyWebView> {
   Future htmlContent = Future.value();
 
   Future<String> _getHtml() async {
-    final filePath = await _getHtmlPath();
+    File fileHtml = await _getHtmlFile();
 
-    if (!kDebugMode && File(filePath).existsSync()) {
+    if (!kDebugMode && fileHtml.existsSync()) {
+      File file = await _getAddrFile();
+      host = file.readAsStringSync();
+
       innerDebug("HTML template: Reading from cache");
-      return File(filePath).readAsStringSync();
+      return fileHtml.readAsStringSync();
     }
 
     await _syncHtmlTemplate();
-    return File(filePath).readAsStringSync();
+
+    File fileRes = await _getHtmlFile();
+    return fileRes.readAsStringSync();
   }
 
   @override
@@ -225,6 +236,7 @@ class _MyWebViewState extends State<ChildWidget> {
       ..addJavaScriptChannel(
         'flFetchMangaList',
         onMessageReceived: (JavaScriptMessage data) async {
+          _controller.runJavaScript("flSetHost('${host}');");
           await _insertMangaList();
         },
       )
@@ -340,7 +352,7 @@ class _MyWebViewState extends State<ChildWidget> {
       )
       ..setNavigationDelegate(
           NavigationDelegate(onPageFinished: (String url) async {
-        _controller.runJavaScript("window.hostUrl = '$host';");
+            // Web page loaded
       }));
     ;
     // #enddocregion platform_features
@@ -416,7 +428,7 @@ class _MyWebViewState extends State<ChildWidget> {
           lastReadedChapter == chapterName ? 'true' : 'false';
 
       jsData.add(
-          "{ name: '$chapterName', itemsCount: ${chapterInfo['count']}, size: '${chapterInfo['size']}MB', isDownloaded: true, isContinue: $continueValue }");
+          "{ name: '$chapterName', itemsCount: ${chapterInfo['count']}, isDownloaded: true, isContinue: $continueValue }");
     }
 
     _controller.runJavaScript("flSyncChapters([${jsData.join(',')}]);");
